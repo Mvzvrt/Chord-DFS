@@ -19,3 +19,8 @@ def generate_node_id(ip, port, m):
     # Convert the hash to an integer and apply a mask to get m bits
     node_id = int(sha1_hash, 16) & ((1 << m) - 1)
     return node_id
+
+def generate_key_id(data, m):
+    sha1_hash = hashlib.sha1(data.encode()).hexdigest()
+    key_id = int(sha1_hash, 16) & ((1 << m) - 1)
+    return key_id

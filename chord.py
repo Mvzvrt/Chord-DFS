@@ -1,6 +1,6 @@
 import socket
 import threading
-from utils import get_local_ip, generate_node_id
+from utils import get_local_ip, generate_node_id, generate_key_id
 
 # Set the number of bits for the identifier space (m bits)
 m = 10  # You can adjust this as needed
@@ -43,7 +43,11 @@ if __name__ == "__main__":
     node.start()
 
     while True:
-        cmd = input("Enter command (ping [IP] [PORT]): ")
+        cmd = input("Enter command (ping [IP] [PORT] or hash [DATA]): ")
         if cmd.startswith('ping'):
             _, ip, port = cmd.split()
             node.send_message('PING', (ip, int(port)))
+        elif cmd.startswith('hash'):
+            _, data = cmd.split(maxsplit=1)
+            key_id = generate_key_id(data, m)
+            print(f"Key ID for data '{data}' is: {key_id}")
