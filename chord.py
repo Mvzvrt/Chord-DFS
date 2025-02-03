@@ -70,8 +70,13 @@ class ChordNode:
             self.predecessor = (parts[1], int(parts[2]))
             self.notify_successor()
             self.set_finger_table()
+            self.update_others()
         elif parts[0] == 'SET_PREDECESSOR':
             self.predecessor = (parts[1], int(parts[2]))
+        elif parts[0] == 'UPDATE_FINGER_TABLE':
+            node_ip, node_port, i = parts[1], int(parts[2]), int(parts[3])
+            self.update_finger_table((node_ip, node_port), i)
+            display_finger_table(self.node_id, self.finger_table)
 
     def send_message(self, message, target):
         self.sock.sendto(message.encode(), target)
@@ -115,6 +120,19 @@ class ChordNode:
                 self.send_message(f'FIND_SUCCESSOR {next_start} {i}', self.successor)
 
         display_finger_table(self.node_id, self.finger_table)
+
+    def update_others(self):
+        for i in range(1, m + 1):
+            pred_id = (self.node_id - 2**(i - 1))
+            p = self.find_predecessor(pred_id)
+            self.send_message(f'UPDATE_FINGER_TABLE {self.ip} {self.port} {i-1}', p)
+
+    def update_finger_table(self, node, i):
+        node_id = generate_node_id(node[0], node[1], m)
+        if in_range(node_id, self.node_id, generate_node_id(self.finger_table[i]['successor'][0], self.finger_table[i]['successor'][1], m)):
+            self.finger_table[i]['successor'] = node
+            self.predecessor = node
+            self.send_message(f'UPDATE_FINGER_TABLE {node[0]} {node[1]} {i}', self.predecessor)
 
 if __name__ == "__main__":
     port = int(input("Enter Port: "))
