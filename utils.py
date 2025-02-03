@@ -24,3 +24,18 @@ def generate_key_id(data, m):
     sha1_hash = hashlib.sha1(data.encode()).hexdigest()
     key_id = int(sha1_hash, 16) & ((1 << m) - 1)
     return key_id
+
+def display_finger_table(node_id, finger_table):
+    # Print the initialized finger table as a formatted table
+    print(f"\nFinger Table for Node {node_id}:")
+    print(f"{'Entry':<6} {'Start':<10} {'Interval':<20} {'Successor':<20}")
+    print("-" * 60)
+    for i, entry in enumerate(finger_table, start=1):
+        print(f"{i:<6} {entry['start']:<10} {str(entry['interval']):<20} {str(entry['successor']):<20}")
+    print("-" * 60)
+
+def in_range(value, start, end):
+    if start < end:
+        return start < value <= end
+    else:
+        return value > start or value <= end
