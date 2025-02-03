@@ -32,7 +32,7 @@ class ChordNode:
             successor = (self.ip, self.port)  # Initially, assume itself as the successor
             self.finger_table.append({'start': start, 'interval': interval, 'successor': successor})
 
-        display_finger_table(self.node_id, self.finger_table)
+        display_finger_table(self.node_id, self.finger_table, m)
 
     def start(self):
         threading.Thread(target=self.listen, daemon=True).start()
@@ -63,7 +63,7 @@ class ChordNode:
             if index == 0:
                 self.successor = (parts[1], int(parts[2]))
                 self.request_predecessor(self.successor)
-            display_finger_table(self.node_id, self.finger_table)
+            display_finger_table(self.node_id, self.finger_table, m)
         elif parts[0] == 'GET_PREDECESSOR':
             self.send_message(f"PREDECESSOR {self.predecessor[0]} {self.predecessor[1]}", addr)
         elif parts[0] == 'PREDECESSOR':
@@ -76,7 +76,7 @@ class ChordNode:
         elif parts[0] == 'UPDATE_FINGER_TABLE':
             node_ip, node_port, i = parts[1], int(parts[2]), int(parts[3])
             self.update_finger_table((node_ip, node_port), i)
-            display_finger_table(self.node_id, self.finger_table)
+            display_finger_table(self.node_id, self.finger_table, m)
 
     def send_message(self, message, target):
         self.sock.sendto(message.encode(), target)
@@ -119,7 +119,7 @@ class ChordNode:
             else:
                 self.send_message(f'FIND_SUCCESSOR {next_start} {i}', self.successor)
 
-        display_finger_table(self.node_id, self.finger_table)
+        display_finger_table(self.node_id, self.finger_table, m)
 
     def update_others(self):
         for i in range(1, m + 1):
