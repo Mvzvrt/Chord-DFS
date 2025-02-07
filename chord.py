@@ -22,6 +22,7 @@ class ChordNode:
         self.finger_table = []  # Initialize the finger table
         self.lock = threading.RLock()
         self.running = True
+        self.data = {}  # Local key/value store for the DHT
 
         # Setup UDP socket for asynchronous messaging
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -54,23 +55,25 @@ class ChordNode:
     def listen(self):
         while self.running:
             try:
-                data, addr = self.sock.recvfrom(1024)
+                data, addr = self.sock.recvfrom(4096)
                 message = data.decode()
                 debug_print(f"Received message from {addr}: {message}")
                 self.handle_message(message, addr)
-            except:
+            except Exception as e:
                 if self.running:
+                    debug_print(f"Listen error: {e}")
                     raise
 
     def handle_message(self, message, addr):
         parts = message.split()
         if not parts:
             return
-        if parts[0] == 'PING':
+        cmd = parts[0]
+        if cmd == 'PING':
             self.send_message('PONG', addr)
-        elif parts[0] == 'PONG':
+        elif cmd == 'PONG':
             debug_print(f"PONG received from {addr}")
-        elif parts[0] == 'FIND_SUCCESSOR':
+        elif cmd == 'FIND_SUCCESSOR':
             start_value = int(parts[1])
             index = int(parts[2]) if len(parts) > 2 else None
             successor = self.find_successor_recursive(start_value)
@@ -80,45 +83,129 @@ class ChordNode:
                         if index is not None else
                         f"SUCCESSOR {successor[0]} {successor[1]}")
             self.send_message(response, addr)
-        elif parts[0] == 'SUCCESSOR':
+        elif cmd == 'SUCCESSOR':
             index = int(parts[3]) if len(parts) > 3 else 0
             with self.lock:
                 self.finger_table[index]['successor'] = (parts[1], int(parts[2]))
                 if index == 0:
                     self.successor = (parts[1], int(parts[2]))
                     self.request_predecessor(self.successor)
-        elif parts[0] == 'GET_PREDECESSOR':
+        elif cmd == 'GET_PREDECESSOR':
             self.send_message(f"PREDECESSOR {self.predecessor[0]} {self.predecessor[1]}", addr)
-        elif parts[0] == 'PREDECESSOR':
+        elif cmd == 'PREDECESSOR':
             with self.lock:
                 self.predecessor = (parts[1], int(parts[2]))
-        elif parts[0] == 'SET_PREDECESSOR':
+        elif cmd == 'SET_PREDECESSOR':
             with self.lock:
                 self.predecessor = (parts[1], int(parts[2]))
-        elif parts[0] == 'UPDATE_FINGER_TABLE':
+        elif cmd == 'UPDATE_FINGER_TABLE':
             node_ip, node_port, i = parts[1], int(parts[2]), int(parts[3])
             self.update_finger_table((node_ip, node_port), i)
-        elif parts[0] == "GET_SUCCESSOR":
+        elif cmd == "GET_SUCCESSOR":
             self.send_message(f"SUCCESSOR_INFO {self.successor[0]} {self.successor[1]}", addr)
-        elif parts[0] == "RPC_CLOSEST_PRECEDING":
+        elif cmd == "RPC_CLOSEST_PRECEDING":
             query_id = int(parts[1])
             node = self.closest_preceding_finger(query_id)
             self.send_message(f"CLOSEST_PRECEDING {node[0]} {node[1]}", addr)
-        elif parts[0] == 'UPDATE_SUCCESSOR':
+        elif cmd == 'UPDATE_SUCCESSOR':
             new_successor = (parts[1], int(parts[2]))
             with self.lock:
                 self.successor = new_successor
                 self.finger_table[0]['successor'] = new_successor
-        elif parts[0] == 'UPDATE_PREDECESSOR':
+        elif cmd == 'UPDATE_PREDECESSOR':
             new_predecessor = (parts[1], int(parts[2]))
             with self.lock:
                 self.predecessor = new_predecessor
+        # --- DHT Operations ---
+        elif cmd == 'PUT':
+            # Format: PUT <key> <value...>
+            key = parts[1]
+            value = " ".join(parts[2:]) if len(parts) > 2 else ""
+            key_id = generate_key_id(key, self.m)
+            if self.is_responsible_for(key_id):
+                with self.lock:
+                    self.data[key] = value
+                self.send_message("PUT_ACK", addr)
+                debug_print(f"Stored key '{key}' locally with value: {value}")
+            else:
+                successor = self.find_successor_recursive(key_id)
+                self.send_message(f"PUT {key} {value}", successor)
+        elif cmd == 'PUT_ACK':
+            debug_print("Received PUT_ACK")
+        elif cmd == 'GET':
+            # Format: GET <key>
+            key = parts[1]
+            key_id = generate_key_id(key, self.m)
+            if self.is_responsible_for(key_id):
+                with self.lock:
+                    value = self.data.get(key, "None")
+                self.send_message(f"GET_REPLY {key} {value}", addr)
+            else:
+                successor = self.find_successor_recursive(key_id)
+                response = self.rpc(f"GET {key}", successor)
+                if response:
+                    self.send_message(response, addr)
+        elif cmd == 'GET_REPLY':
+            # For an RPC response, simply forward the reply.
+            self.send_message(message, addr)
+        elif cmd == 'DELETE':
+            # Format: DELETE <key>
+            key = parts[1]
+            key_id = generate_key_id(key, self.m)
+            if self.is_responsible_for(key_id):
+                with self.lock:
+                    if key in self.data:
+                        del self.data[key]
+                        self.send_message(f"DELETE_ACK {key} deleted", addr)
+                        debug_print(f"Deleted key '{key}' locally.")
+                    else:
+                        self.send_message(f"DELETE_ACK {key} not_found", addr)
+            else:
+                successor = self.find_successor_recursive(key_id)
+                response = self.rpc(f"DELETE {key}", successor)
+                if response:
+                    self.send_message(response, addr)
+        elif cmd == 'DELETE_ACK':
+            debug_print(f"Received DELETE_ACK: {message}")
+        elif cmd == "TRANSFER_KEYS_REQUEST":
+            # Format: TRANSFER_KEYS_REQUEST <new_node_ip> <new_node_port> <new_node_id> <new_node_pred_id>
+            new_node_ip = parts[1]
+            new_node_port = int(parts[2])
+            new_node_id = int(parts[3])
+            new_node_pred_id = int(parts[4])
+            keys_to_transfer = []
+            with self.lock:
+                # Find keys for which the new node is now responsible.
+                for key, value in list(self.data.items()):
+                    key_id = generate_key_id(key, self.m)
+                    if in_range(key_id, new_node_pred_id, new_node_id, self.m):
+                        keys_to_transfer.append((key, value))
+                        del self.data[key]
+            if keys_to_transfer:
+                data_str = ";;".join([f"{k}|{v}" for k, v in keys_to_transfer])
+            else:
+                data_str = ""
+            self.send_message(f"TRANSFER_KEYS_REPLY {data_str}", (new_node_ip, new_node_port))
+            debug_print(f"Transferred keys {keys_to_transfer} to new node {new_node_ip}:{new_node_port}")
+        elif cmd == "TRANSFER_KEYS_REPLY":
+            # Format: TRANSFER_KEYS_REPLY <key1>|<value1>;;<key2>|<value2>;;...
+            data_str = " ".join(parts[1:])
+            if data_str:
+                pairs = data_str.split(";;")
+                with self.lock:
+                    for pair in pairs:
+                        if pair:
+                            k, v = pair.split("|", 1)
+                            self.data[k] = v
+                debug_print(f"Received transferred keys: {self.data}")
+        else:
+            debug_print(f"Unknown command: {message}")
 
     def send_message(self, message, target):
         try:
             self.sock.sendto(message.encode(), target)
-        except:
-            debug_print(f"Failed to send message to {target}")
+        except Exception as e:
+            debug_print(f"Failed to send message to {target}: {e}")
 
     def rpc(self, message, target, timeout=2, retries=3):
         """A simple RPC mechanism over UDP with retries."""
@@ -127,7 +214,7 @@ class ChordNode:
             temp_sock.settimeout(timeout)
             try:
                 temp_sock.sendto(message.encode(), target)
-                data, _ = temp_sock.recvfrom(1024)
+                data, _ = temp_sock.recvfrom(4096)
                 temp_sock.close()
                 return data.decode()
             except Exception as e:
@@ -136,10 +223,20 @@ class ChordNode:
                 continue
         return None
 
-
     def join(self, known_node):
         start_value = self.finger_table[0]['start']
         self.send_message(f'FIND_SUCCESSOR {start_value} 0', known_node)
+        # Delay key retrieval so stabilization can finish.
+        threading.Thread(target=self.delayed_retrieve_keys, daemon=True).start()
+
+    def delayed_retrieve_keys(self):
+        time.sleep(2)
+        with self.lock:
+            pred_id = generate_node_id(self.predecessor[0], self.predecessor[1], self.m)
+            self_id = self.node_id
+            successor = self.successor
+        # Ask our successor to transfer keys for which we are now responsible.
+        self.send_message(f"TRANSFER_KEYS_REQUEST {self.ip} {self.port} {self_id} {pred_id}", successor)
 
     def find_successor_recursive(self, id):
         current = (self.ip, self.port)
@@ -197,7 +294,6 @@ class ChordNode:
                     self.send_message(f'UPDATE_FINGER_TABLE {node[0]} {node[1]} {i}', self.predecessor)
 
     # --- Stabilization Protocols with Timeouts and Fallbacks ---
-
     def stabilize(self):
         """Periodically verify and update the successor, then notify the successor of self.
         
@@ -246,7 +342,6 @@ class ChordNode:
                             self.finger_table[0]['successor'] = (self.ip, self.port)
                         debug_print("Stabilize: No alternate candidate found; set successor to self.")
 
-
                 # Notify the (possibly updated) successor about self.
                 with self.lock:
                     self.send_message(f"SET_PREDECESSOR {self.ip} {self.port}", self.successor)
@@ -288,12 +383,87 @@ class ChordNode:
                     self.predecessor = (self.ip, self.port)
             time.sleep(1)
 
+    def is_responsible_for(self, key_id):
+        """
+        Determine whether this node is responsible for the given key_id.
+        In Chord, a node is responsible for keys in (predecessor, self].
+        If the node is alone (predecessor == self) then it is responsible for all keys.
+        """
+        if self.predecessor == (self.ip, self.port):
+            return True
+        pred_id = generate_node_id(self.predecessor[0], self.predecessor[1], self.m)
+        return in_range(key_id, pred_id, self.node_id, self.m)
+
+    # --- DHT Operations for Clients ---
+    def put(self, key, value):
+        """Store a key/value pair in the DHT."""
+        key_id = generate_key_id(key, self.m)
+        if self.is_responsible_for(key_id):
+            with self.lock:
+                self.data[key] = value
+            print(f"Key '{key}' stored locally.")
+        else:
+            successor = self.find_successor_recursive(key_id)
+            response = self.rpc(f"PUT {key} {value}", successor)
+            if response and response.startswith("PUT_ACK"):
+                print(f"Key '{key}' stored on remote node.")
+            else:
+                print(f"Failed to store key '{key}'.")
+
+    def get(self, key):
+        """Retrieve a key's value from the DHT."""
+        key_id = generate_key_id(key, self.m)
+        if self.is_responsible_for(key_id):
+            with self.lock:
+                value = self.data.get(key)
+            if value is not None:
+                print(f"Value for key '{key}': {value}")
+            else:
+                print(f"Key '{key}' not found.")
+        else:
+            successor = self.find_successor_recursive(key_id)
+            response = self.rpc(f"GET {key}", successor)
+            if response and response.startswith("GET_REPLY"):
+                parts = response.split(maxsplit=2)
+                if len(parts) >= 3:
+                    print(f"Value for key '{key}': {parts[2]}")
+                else:
+                    print(f"Key '{key}' not found on remote node.")
+            else:
+                print(f"Failed to retrieve key '{key}'.")
+
+    def delete(self, key):
+        """Delete a key/value pair from the DHT."""
+        key_id = generate_key_id(key, self.m)
+        if self.is_responsible_for(key_id):
+            with self.lock:
+                if key in self.data:
+                    del self.data[key]
+                    print(f"Key '{key}' deleted locally.")
+                else:
+                    print(f"Key '{key}' not found.")
+        else:
+            successor = self.find_successor_recursive(key_id)
+            response = self.rpc(f"DELETE {key}", successor)
+            if response and response.startswith("DELETE_ACK"):
+                print(f"Key '{key}' deleted on remote node.")
+            else:
+                print(f"Failed to delete key '{key}'.")
+
     def leave_gracefully(self):
-        """Notify predecessor and successor, then shut down."""
+        """
+        Transfer keys to the successor (if any), then notify the predecessor
+        and successor so that they update their pointers before shutting down.
+        """
         with self.lock:
             pred = self.predecessor
             succ = self.successor
         debug_print("Leaving the network gracefully...")
+        # Transfer all keys to successor.
+        if succ != (self.ip, self.port) and self.data:
+            data_str = ";;".join([f"{k}|{v}" for k, v in self.data.items()])
+            self.send_message(f"TRANSFER_KEYS_REPLY {data_str}", succ)
+            debug_print(f"Transferred local keys to successor {succ}.")
         if pred != (self.ip, self.port):
             self.send_message(f"UPDATE_SUCCESSOR {succ[0]} {succ[1]}", pred)
         if succ != (self.ip, self.port):
@@ -304,35 +474,64 @@ class ChordNode:
 
 def cli(node):
     """A simple command-line interface running concurrently with the node."""
-    help_text = ("Commands:\n"
-                 "  ft     - Display the current finger table\n"
-                 "  state  - Show current node state\n"
-                 "  debug  - Toggle debug messages\n"
-                 "  leave  - Gracefully leave the network\n"
-                 "  help   - Show this help message\n"
-                 "  quit   - Exit the CLI and terminate the node")
+    help_text = (
+        "Commands:\n"
+        "  ft           - Display the current finger table\n"
+        "  state        - Show current node state\n"
+        "  put <k> <v>  - Store key/value pair in the DHT\n"
+        "  get <k>      - Retrieve value for key from the DHT\n"
+        "  delete <k>   - Delete key from the DHT\n"
+        "  debug        - Toggle debug messages\n"
+        "  leave        - Gracefully leave the network\n"
+        "  help         - Show this help message\n"
+        "  quit         - Exit the CLI and terminate the node"
+    )
     print(help_text)
     while True:
-        cmd = input("ChordCLI> ").strip().lower()
-        if cmd in ["ft", "finger", "fingers"]:
+        cmd = input("ChordCLI> ").strip()
+        if not cmd:
+            continue
+        tokens = cmd.split()
+        command = tokens[0].lower()
+        if command in ["ft", "finger", "fingers"]:
             display_finger_table(node.node_id, node.finger_table, node.m)
-        elif cmd == "help":
+        elif command == "help":
             print(help_text)
-        elif cmd == "debug":
+        elif command == "debug":
             global DEBUG
             DEBUG = not DEBUG
             print(f"Debug mode {'enabled' if DEBUG else 'disabled'}.")
-        elif cmd == "state":
+        elif command == "state":
             with node.lock:
                 print(f"Node ID: {node.node_id}")
                 print(f"Predecessor: {node.predecessor}")
                 print(f"Successor: {node.successor}")
                 display_finger_table(node.node_id, node.finger_table, node.m)
-        elif cmd == "leave":
+                print("Stored Data:", node.data)
+        elif command == "put":
+            if len(tokens) < 3:
+                print("Usage: put <key> <value>")
+            else:
+                key = tokens[1]
+                value = " ".join(tokens[2:])
+                node.put(key, value)
+        elif command == "get":
+            if len(tokens) < 2:
+                print("Usage: get <key>")
+            else:
+                key = tokens[1]
+                node.get(key)
+        elif command == "delete":
+            if len(tokens) < 2:
+                print("Usage: delete <key>")
+            else:
+                key = tokens[1]
+                node.delete(key)
+        elif command == "leave":
             node.leave_gracefully()
             print("Node is leaving the network. Goodbye!")
             exit(0)
-        elif cmd == "quit":
+        elif command == "quit":
             print("Exiting CLI and terminating node.")
             exit(0)
         else:
