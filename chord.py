@@ -130,10 +130,12 @@ class ChordNode:
                 data, _ = temp_sock.recvfrom(1024)
                 temp_sock.close()
                 return data.decode()
-            except socket.timeout:
+            except Exception as e:
+                debug_print(f"RPC error on attempt {attempt+1} to target {target}: {e}")
                 temp_sock.close()
                 continue
         return None
+
 
     def join(self, known_node):
         start_value = self.finger_table[0]['start']
@@ -194,14 +196,19 @@ class ChordNode:
                 if self.predecessor != node:
                     self.send_message(f'UPDATE_FINGER_TABLE {node[0]} {node[1]} {i}', self.predecessor)
 
-    # --- Stabilization Protocols ---
+    # --- Stabilization Protocols with Timeouts and Fallbacks ---
 
     def stabilize(self):
-        """Periodically verify and update the successor, then notify the successor of self."""
+        """Periodically verify and update the successor, then notify the successor of self.
+        
+        Uses timeouts to detect failures and falls back to alternate candidates from the
+        finger table if the current successor does not respond.
+        """
         while self.running:
             try:
                 with self.lock:
                     successor = self.successor
+                # Attempt to get the predecessor of our successor with a timeout.
                 response = self.rpc("GET_PREDECESSOR", successor, timeout=1)
                 if response:
                     parts = response.split()
@@ -209,11 +216,38 @@ class ChordNode:
                         x = (parts[1], int(parts[2]))
                         x_id = generate_node_id(x[0], x[1], self.m)
                         succ_id = generate_node_id(successor[0], successor[1], self.m)
+                        # If x is a better candidate for successor, update it.
                         if x != (self.ip, self.port) and in_range(x_id, self.node_id, succ_id, self.m):
                             with self.lock:
                                 self.successor = x
                                 self.finger_table[0]['successor'] = x
-                # Notify the successor about self
+                else:
+                    # No response from current successor; try alternate candidates from the finger table.
+                    debug_print(f"Stabilize: Successor {successor} not responding; checking alternate fingers.")
+                    alternate = None
+                    with self.lock:
+                        for entry in self.finger_table:
+                            candidate = entry['successor']
+                            if candidate != (self.ip, self.port) and candidate != successor:
+                                # Ping the candidate with a timeout.
+                                ping_response = self.rpc("PING", candidate, timeout=1)
+                                if ping_response:
+                                    alternate = candidate
+                                    break
+                    if alternate:
+                        with self.lock:
+                            self.successor = alternate
+                            self.finger_table[0]['successor'] = alternate
+                        debug_print(f"Stabilize: Alternate candidate {alternate} set as new successor.")
+                    else:
+                        # If no alternate candidate is found, assume you're the only live node.
+                        with self.lock:
+                            self.successor = (self.ip, self.port)
+                            self.finger_table[0]['successor'] = (self.ip, self.port)
+                        debug_print("Stabilize: No alternate candidate found; set successor to self.")
+
+
+                # Notify the (possibly updated) successor about self.
                 with self.lock:
                     self.send_message(f"SET_PREDECESSOR {self.ip} {self.port}", self.successor)
             except Exception as e:
@@ -237,7 +271,7 @@ class ChordNode:
             time.sleep(1)
 
     def check_predecessor(self):
-        """Periodically check whether the predecessor is still alive."""
+        """Periodically check whether the predecessor is still alive using timeouts."""
         while self.running:
             try:
                 with self.lock:
@@ -245,7 +279,7 @@ class ChordNode:
                 if predecessor != (self.ip, self.port):
                     response = self.rpc("PING", predecessor, timeout=1)
                     if response is None:
-                        debug_print("Predecessor not responding; resetting predecessor to self.")
+                        debug_print("Check predecessor: Predecessor not responding; resetting predecessor to self.")
                         with self.lock:
                             self.predecessor = (self.ip, self.port)
             except Exception as e:
