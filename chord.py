@@ -228,6 +228,8 @@ class ChordNode:
         self.send_message(f'FIND_SUCCESSOR {start_value} 0', known_node)
         # Delay key retrieval so stabilization can finish.
         threading.Thread(target=self.delayed_retrieve_keys, daemon=True).start()
+        # Immediately propagate update to affected nodes.
+        threading.Thread(target=self.update_others, daemon=True).start()
 
     def delayed_retrieve_keys(self):
         time.sleep(2)
@@ -293,13 +295,65 @@ class ChordNode:
                 if self.predecessor != node:
                     self.send_message(f'UPDATE_FINGER_TABLE {node[0]} {node[1]} {i}', self.predecessor)
 
+    # --- Immediate Update Propagation Methods ---
+    def find_predecessor(self, id):
+        """
+        Finds the node p such that id is in (p, p.successor].
+        This is used during the update_others process.
+        """
+        p = (self.ip, self.port)
+        while True:
+            # Get p's successor
+            if p == (self.ip, self.port):
+                with self.lock:
+                    p_successor = self.successor
+            else:
+                response = self.rpc("GET_SUCCESSOR", p)
+                if response:
+                    parts = response.split()
+                    if parts[0] == "SUCCESSOR_INFO":
+                        p_successor = (parts[1], int(parts[2]))
+                    else:
+                        p_successor = (self.ip, self.port)
+                else:
+                    p_successor = (self.ip, self.port)
+            p_id = generate_node_id(p[0], p[1], self.m)
+            ps_id = generate_node_id(p_successor[0], p_successor[1], self.m)
+            if in_range(id, p_id, ps_id, self.m):
+                return p
+            else:
+                # Use local closest_preceding_finger if p is self,
+                # otherwise ask p for its closest preceding finger.
+                if p == (self.ip, self.port):
+                    p = self.closest_preceding_finger(id)
+                else:
+                    response = self.rpc(f"RPC_CLOSEST_PRECEDING {id}", p)
+                    if response:
+                        parts = response.split()
+                        if parts[0] == "CLOSEST_PRECEDING":
+                            p = (parts[1], int(parts[2]))
+                        else:
+                            break
+                    else:
+                        break
+        return p
+
+    def update_others(self):
+        """
+        For each i from 1 to m, find the last node p whose i-th finger might need to be updated,
+        and send it an update message.
+        """
+        for i in range(1, self.m + 1):
+            pred_index = (self.node_id - 2**(i - 1) + 2**self.m) % (2**self.m)
+            p = self.find_predecessor(pred_index)
+            if p != (self.ip, self.port):
+                self.rpc(f"UPDATE_FINGER_TABLE {self.ip} {self.port} {i - 1}", p)
+            # Small delay to avoid flooding
+            time.sleep(0.1)
+
     # --- Stabilization Protocols with Timeouts and Fallbacks ---
     def stabilize(self):
-        """Periodically verify and update the successor, then notify the successor of self.
-        
-        Uses timeouts to detect failures and falls back to alternate candidates from the
-        finger table if the current successor does not respond.
-        """
+        """Periodically verify and update the successor, then notify the successor about self."""
         while self.running:
             try:
                 with self.lock:
@@ -325,7 +379,6 @@ class ChordNode:
                         for entry in self.finger_table:
                             candidate = entry['successor']
                             if candidate != (self.ip, self.port) and candidate != successor:
-                                # Ping the candidate with a timeout.
                                 ping_response = self.rpc("PING", candidate, timeout=1)
                                 if ping_response:
                                     alternate = candidate
@@ -336,7 +389,6 @@ class ChordNode:
                             self.finger_table[0]['successor'] = alternate
                         debug_print(f"Stabilize: Alternate candidate {alternate} set as new successor.")
                     else:
-                        # If no alternate candidate is found, assume you're the only live node.
                         with self.lock:
                             self.successor = (self.ip, self.port)
                             self.finger_table[0]['successor'] = (self.ip, self.port)
