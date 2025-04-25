@@ -491,8 +491,9 @@ class ChordNode:
             else:
                 print(f"Failed to retrieve key '{key}'.")
 
+   
     def delete(self, key):
-        key_id = generate_node_id(key, self.m)
+        key_id = generate_key_id(key, self.m)  
         if self.is_responsible_for(key_id):
             with self.lock:
                 if key in self.data:
