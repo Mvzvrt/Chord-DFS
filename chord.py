@@ -655,7 +655,6 @@ def cli(node):
         "  debug        - Toggle debug messages\n"
         "  leave        - Gracefully leave the network\n"
         "  help         - Show this help message\n"
-        "  quit         - Exit the CLI and terminate the node"
     )
     print(help_text)
     while True:
@@ -700,9 +699,6 @@ def cli(node):
         elif command == "leave":
             node.leave_gracefully()
             print("Node is leaving the network. Goodbye!")
-            exit(0)
-        elif command == "quit":
-            print("Exiting CLI and terminating node.")
             exit(0)
         elif command == "files":
             print("Retrieving files in the network...")
