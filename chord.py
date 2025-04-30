@@ -239,12 +239,17 @@ class ChordNode:
             data_str = " ".join(parts[1:])
             if data_str:
                 pairs = data_str.split(";;")
+                desktop_path = os.path.join(os.path.expanduser("~"), "Desktop", "ChordDFS Files")
+                os.makedirs(desktop_path, exist_ok=True)
                 with self.lock:
                     for pair in pairs:
                         if pair:
-                            k, v = pair.split("|", 1)
-                            self.data[k] = v
-                debug_print("TRANSFER_KEYS_REPLY: Received transferred keys:", self.data)
+                            key, file_name, file_content_hex = pair.split("|", 2)
+                            self.data[key] = file_name
+                            file_content = bytes.fromhex(file_content_hex)  # Convert hex back to binary
+                            with open(os.path.join(desktop_path, file_name), 'wb') as f:
+                                f.write(file_content)
+                debug_print("TRANSFER_KEYS_REPLY: Received transferred keys and files:", self.data)
         elif cmd == 'LIST_FILES':
             with self.lock:
                 values = list(self.data.values())
@@ -591,9 +596,21 @@ class ChordNode:
             succ = self.successor
         debug_print("leave_gracefully: Initiating graceful leave.")
         if succ != (self.ip, self.port) and self.data:
-            data_str = ";;".join([f"{k}|{v}" for k, v in self.data.items()])
-            self.send_message(f"TRANSFER_KEYS_REPLY {data_str}", succ)
-            debug_print(f"leave_gracefully: Transferred keys to successor {succ}.")
+            # Serialize file names and contents
+            data_str = []
+            desktop_path = os.path.join(os.path.expanduser("~"), "Desktop", "ChordDFS Files")
+            for key, file_name in self.data.items():
+                file_path = os.path.join(desktop_path, file_name)
+                if os.path.isfile(file_path):
+                    with open(file_path, 'rb') as f:
+                        file_content = f.read()
+                    if DEBUG:
+                        debug_message = f"\n[DEBUG] File '{file_name}' with key '{key}' transferred from node {self.ip}:{self.port} to successor {succ}.\n"
+                        file_content += debug_message.encode()  # Append debug message as bytes
+                    data_str.append(f"{key}|{file_name}|{file_content.hex()}")  # Convert binary to hex for safe transmission
+            serialized_data = ";;".join(data_str)
+            self.send_message(f"TRANSFER_KEYS_REPLY {serialized_data}", succ)
+            debug_print(f"leave_gracefully: Transferred keys and files to successor {succ}.")
         if pred != (self.ip, self.port):
             self.send_message(f"UPDATE_SUCCESSOR {succ[0]} {succ[1]}", pred)
         if succ != (self.ip, self.port):
