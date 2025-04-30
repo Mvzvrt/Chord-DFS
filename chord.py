@@ -133,21 +133,39 @@ class ChordNode:
                 self.predecessor = new_predecessor
             debug_print("UPDATE_PREDECESSOR: Updated predecessor to", new_predecessor)
         # --- DHT Operations ---
-        elif cmd == 'PUT':
+        # elif cmd == 'PUT':
+        #     key = parts[1]
+        #     value = " ".join(parts[2:]) if len(parts) > 2 else ""
+        #     key_id = generate_key_id(key, self.m)
+        #     if self.is_responsible_for(key_id):
+        #         with self.lock:
+        #             self.data[key] = value
+        #         debug_print(f"PUT: Stored key '{key}' locally with value: {value}")
+        #         self.send_message("PUT_ACK", addr)
+        #     else:
+        #         successor = self.find_successor_recursive(key_id)
+        #         debug_print(f"PUT: Forwarding key '{key}' to successor {successor}")
+        #         self.send_message(f"PUT {key} {value}", successor)
+        # elif cmd == 'PUT_ACK':
+        #     debug_print("PUT_ACK received from", addr)
+
+        elif cmd == 'UPLOAD':
             key = parts[1]
             value = " ".join(parts[2:]) if len(parts) > 2 else ""
-            key_id = generate_key_id(key, self.m)
+            key_id = int(key)
             if self.is_responsible_for(key_id):
                 with self.lock:
                     self.data[key] = value
-                debug_print(f"PUT: Stored key '{key}' locally with value: {value}")
-                self.send_message("PUT_ACK", addr)
+                debug_print(f"UPLOAD: Stored key '{key}' locally with value: {value}")
+                self.send_message("UPLOAD_ACK", addr)
             else:
                 successor = self.find_successor_recursive(key_id)
-                debug_print(f"PUT: Forwarding key '{key}' to successor {successor}")
-                self.send_message(f"PUT {key} {value}", successor)
-        elif cmd == 'PUT_ACK':
-            debug_print("PUT_ACK received from", addr)
+                debug_print(f"UPLOAD: Forwarding key '{key}' to successor {successor}")
+                self.send_message(f"UPLOAD {key} {value}", successor)
+
+        elif cmd == 'UPLOAD_ACK':
+            debug_print("UPLOAD_ACK received from", addr)
+
         elif cmd == 'GET':
             key = parts[1]
             key_id = generate_key_id(key, self.m)
@@ -213,6 +231,15 @@ class ChordNode:
                             k, v = pair.split("|", 1)
                             self.data[k] = v
                 debug_print("TRANSFER_KEYS_REPLY: Received transferred keys:", self.data)
+        elif cmd == 'LIST_FILES':
+            with self.lock:
+                keys = list(self.data.keys())
+            keys_str = ";;".join(keys) if keys else "None"
+            debug_print(f"LIST_FILES: Sending local keys {keys} to {addr}")
+            self.send_message(f"FILES_REPLY {keys_str}", addr)
+        elif cmd == 'FILES_REPLY':
+            # This will be handled by the requesting node
+            debug_print(f"FILES_REPLY received from {addr}: {message}")
         else:
             debug_print("Unknown command received:", message)
 
@@ -450,21 +477,35 @@ class ChordNode:
         return in_range(key_id, pred_id, self.node_id, self.m)
 
     # --- DHT Operations for Clients ---
-    def put(self, key, value):
-        key_id = generate_key_id(key, self.m)
+    # def put(self, key, value):
+    #    key_id = generate_key_id(key, self.m)
+    #    if self.is_responsible_for(key_id):
+    #        with self.lock:
+    #            self.data[key] = value
+    #        print(f"Key '{key}' stored locally.")
+    #        debug_print(f"put: Key '{key}' stored locally with value '{value}'.")
+    #    else:
+    #        successor = self.find_successor_recursive(key_id)
+    #        debug_print(f"put: Forwarding key '{key}' to node {successor}.")
+    #        response = self.rpc(f"PUT {key} {value}", successor)
+    #        if response and response.startswith("PUT_ACK"):
+    #            print(f"Key '{key}' stored on remote node.")
+    #        else:
+    #            print(f"Failed to store key '{key}'.")
+
+    def upload(self, value):
+        """Hash the value to generate a key and store it in the Chord network."""
+        key_id = generate_key_id(value, self.m)  # Generate the key by hashing the value
+        key_str = str(key_id)  # Convert the key to a string for storage
         if self.is_responsible_for(key_id):
             with self.lock:
-                self.data[key] = value
-            print(f"Key '{key}' stored locally.")
-            debug_print(f"put: Key '{key}' stored locally with value '{value}'.")
+                self.data[key_str] = value
+            print(f"Uploaded value '{value}' with generated key '{key_str}' locally.")
+            debug_print(f"UPLOAD: Stored value '{value}' locally with key '{key_str}'.")
         else:
             successor = self.find_successor_recursive(key_id)
-            debug_print(f"put: Forwarding key '{key}' to node {successor}.")
-            response = self.rpc(f"PUT {key} {value}", successor)
-            if response and response.startswith("PUT_ACK"):
-                print(f"Key '{key}' stored on remote node.")
-            else:
-                print(f"Failed to store key '{key}'.")
+            debug_print(f"UPLOAD: Forwarding value '{value}' to successor {successor}.")
+            self.send_message(f"UPLOAD {key_str} {value}", successor)
 
     def get(self, key):
         key_id = generate_key_id(key, self.m)
@@ -528,14 +569,39 @@ class ChordNode:
         self.sock.close()
         debug_print("leave_gracefully: Node has left the network.")
 
+    def list_files(self):
+        """Retrieve all keys stored in the Chord network."""
+        all_keys = set()
+        visited_nodes = set()
+        current_node = (self.ip, self.port)
+
+        while current_node not in visited_nodes:
+            visited_nodes.add(current_node)
+            response = self.rpc("LIST_FILES", current_node)
+            if response and response.startswith("FILES_REPLY"):
+                keys_str = response.split(maxsplit=1)[1] if len(response.split(maxsplit=1)) > 1 else ""
+                if keys_str != "None":
+                    all_keys.update(keys_str.split(";;"))
+            # Move to the successor
+            with self.lock:
+                current_node = self.successor
+
+        print("Files in the network:")
+        if all_keys:
+            for key in sorted(all_keys):
+                print(f" - {key}")
+        else:
+            print("No files found in the network.")
+
 def cli(node):
     help_text = (
         "Commands:\n"
         "  ft           - Display the current finger table\n"
         "  state        - Show current node state\n"
-        "  put <k> <v>  - Store key/value pair in the DHT\n"
+        "  upload <v>   - Upload a value to the DHT (key is auto-generated)\n"  # Updated this line
         "  get <k>      - Retrieve value for key from the DHT\n"
         "  delete <k>   - Delete key from the DHT\n"
+        "  list_files   - List all files in the network\n"
         "  debug        - Toggle debug messages\n"
         "  leave        - Gracefully leave the network\n"
         "  help         - Show this help message\n"
@@ -563,13 +629,12 @@ def cli(node):
                 print(f"Successor: {node.successor}")
                 display_finger_table(node.node_id, node.finger_table, node.m)
                 print("Stored Data:", node.data)
-        elif command == "put":
-            if len(tokens) < 3:
-                print("Usage: put <key> <value>")
+        elif command == "upload":
+            if len(tokens) < 2:
+                print("Usage: upload <value>")
             else:
-                key = tokens[1]
-                value = " ".join(tokens[2:])
-                node.put(key, value)
+                value = " ".join(tokens[1:])
+                node.upload(value)
         elif command == "get":
             if len(tokens) < 2:
                 print("Usage: get <key>")
@@ -589,6 +654,9 @@ def cli(node):
         elif command == "quit":
             print("Exiting CLI and terminating node.")
             exit(0)
+        elif command == "list_files":
+            print("Retrieving files in the network...")
+            node.list_files()
         else:
             print("Unknown command. Type 'help' for available commands.")
 
