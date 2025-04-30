@@ -233,10 +233,10 @@ class ChordNode:
                 debug_print("TRANSFER_KEYS_REPLY: Received transferred keys:", self.data)
         elif cmd == 'LIST_FILES':
             with self.lock:
-                keys = list(self.data.keys())
-            keys_str = ";;".join(keys) if keys else "None"
-            debug_print(f"LIST_FILES: Sending local keys {keys} to {addr}")
-            self.send_message(f"FILES_REPLY {keys_str}", addr)
+                values = list(self.data.values())
+            values_str = ";;".join(values) if values else "None"
+            debug_print(f"LIST_FILES: Sending local keys {values} to {addr}")
+            self.send_message(f"FILES_REPLY {values_str}", addr)
         elif cmd == 'FILES_REPLY':
             # This will be handled by the requesting node
             debug_print(f"FILES_REPLY received from {addr}: {message}")
@@ -571,7 +571,7 @@ class ChordNode:
 
     def list_files(self):
         """Retrieve all keys stored in the Chord network."""
-        all_keys = set()
+        all_files = set()
         visited_nodes = set()
         current_node = (self.ip, self.port)
 
@@ -579,17 +579,17 @@ class ChordNode:
             visited_nodes.add(current_node)
             response = self.rpc("LIST_FILES", current_node)
             if response and response.startswith("FILES_REPLY"):
-                keys_str = response.split(maxsplit=1)[1] if len(response.split(maxsplit=1)) > 1 else ""
-                if keys_str != "None":
-                    all_keys.update(keys_str.split(";;"))
+                values_str = response.split(maxsplit=1)[1] if len(response.split(maxsplit=1)) > 1 else ""
+                if values_str != "None":
+                    all_files.update(values_str.split(";;"))
             # Move to the successor
             with self.lock:
                 current_node = self.successor
 
         print("Files in the network:")
-        if all_keys:
-            for key in sorted(all_keys):
-                print(f" - {key}")
+        if all_files:
+            for file in sorted(all_files):
+                print(f" - {file}")
         else:
             print("No files found in the network.")
 
@@ -601,7 +601,7 @@ def cli(node):
         "  upload <v>   - Upload a value to the DHT (key is auto-generated)\n"  # Updated this line
         "  get <k>      - Retrieve value for key from the DHT\n"
         "  delete <k>   - Delete key from the DHT\n"
-        "  list_files   - List all files in the network\n"
+        "  files        - List all files in the network\n"
         "  debug        - Toggle debug messages\n"
         "  leave        - Gracefully leave the network\n"
         "  help         - Show this help message\n"
@@ -654,7 +654,7 @@ def cli(node):
         elif command == "quit":
             print("Exiting CLI and terminating node.")
             exit(0)
-        elif command == "list_files":
+        elif command == "files":
             print("Retrieving files in the network...")
             node.list_files()
         else:
