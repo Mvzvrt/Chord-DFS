@@ -1,6 +1,8 @@
 import socket
 import threading
 import time
+import os
+
 from utils import get_local_ip, generate_node_id, generate_key_id, display_finger_table, in_range
 
 # Global flag for background logging
@@ -151,17 +153,29 @@ class ChordNode:
 
         elif cmd == 'UPLOAD':
             key = parts[1]
-            value = " ".join(parts[2:]) if len(parts) > 2 else ""
+            file_name = " ".join(parts[2:])
             key_id = int(key)
+
+            # Receive the file content
+            file_content, _ = self.sock.recvfrom(4096)
+
             if self.is_responsible_for(key_id):
+                # Store the file locally
                 with self.lock:
-                    self.data[key] = value
-                debug_print(f"UPLOAD: Stored key '{key}' locally with value: {value}")
+                    self.data[key] = file_name
+                # Save the file to the local directory
+                desktop_path = os.path.join(os.path.expanduser("~"), "Desktop", "ChordDFS Files")
+                os.makedirs(desktop_path, exist_ok=True)
+                with open(os.path.join(desktop_path, file_name), 'wb') as f:
+                    f.write(file_content)
+                debug_print(f"UPLOAD: Stored file '{file_name}' locally with key '{key}'.")
                 self.send_message("UPLOAD_ACK", addr)
             else:
+                # Forward the file to the successor
                 successor = self.find_successor_recursive(key_id)
-                debug_print(f"UPLOAD: Forwarding key '{key}' to successor {successor}")
-                self.send_message(f"UPLOAD {key} {value}", successor)
+                debug_print(f"UPLOAD: Forwarding file '{file_name}' to successor {successor}.")
+                self.send_message(f"UPLOAD {key} {file_name}", successor)
+                self.sock.sendto(file_content, successor)
 
         elif cmd == 'UPLOAD_ACK':
             debug_print("UPLOAD_ACK received from", addr)
@@ -493,19 +507,38 @@ class ChordNode:
     #        else:
     #            print(f"Failed to store key '{key}'.")
 
-    def upload(self, value):
-        """Hash the value to generate a key and store it in the Chord network."""
-        key_id = generate_key_id(value, self.m)  # Generate the key by hashing the value
-        key_str = str(key_id)  # Convert the key to a string for storage
+    def upload(self, file_name):
+        """Upload a file to the Chord network."""
+        if not os.path.isfile(file_name):
+            print(f"File '{file_name}' does not exist.")
+            return
+
+        # Read the file content
+        with open(file_name, 'rb') as f:
+            file_content = f.read()
+
+        # Generate a key for the file based on its name
+        key_id = generate_key_id(file_name, self.m)
+        key_str = str(key_id)
+
         if self.is_responsible_for(key_id):
+            # Store the file locally
             with self.lock:
-                self.data[key_str] = value
-            print(f"Uploaded value '{value}' with generated key '{key_str}' locally.")
-            debug_print(f"UPLOAD: Stored value '{value}' locally with key '{key_str}'.")
+                self.data[key_str] = file_name
+            # Save the file to the local directory
+            desktop_path = os.path.join(os.path.expanduser("~"), "Desktop", "ChordDFS Files")
+            os.makedirs(desktop_path, exist_ok=True)
+            with open(os.path.join(desktop_path, file_name), 'wb') as f:
+                f.write(file_content)
+            print(f"Uploaded file '{file_name}' with generated key '{key_str}' locally.")
+            debug_print(f"UPLOAD: Stored file '{file_name}' locally with key '{key_str}'.")
         else:
+            # Forward the file to the successor
             successor = self.find_successor_recursive(key_id)
-            debug_print(f"UPLOAD: Forwarding value '{value}' to successor {successor}.")
-            self.send_message(f"UPLOAD {key_str} {value}", successor)
+            debug_print(f"UPLOAD: Forwarding file '{file_name}' to successor {successor}.")
+            self.send_message(f"UPLOAD {key_str} {file_name}", successor)
+            # Send the file content
+            self.sock.sendto(file_content, successor)
 
     def get(self, key):
         key_id = generate_key_id(key, self.m)
