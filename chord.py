@@ -2,6 +2,11 @@ import socket
 import threading
 import time
 import os
+import sys
+from colorama import Fore, Style, init
+
+# Initialize colorama for cross-platform color support
+init()
 
 from utils import get_local_ip, generate_node_id, generate_key_id, display_finger_table, in_range
 
@@ -644,67 +649,99 @@ class ChordNode:
             print("No files found in the network.")
 
 def cli(node):
-    help_text = (
-        "Commands:\n"
-        "  ft           - Display the current finger table\n"
-        "  state        - Show current node state\n"
-        "  upload <v>   - Upload a value to the DHT (key is auto-generated)\n"  # Updated this line
-        "  get <k>      - Retrieve value for key from the DHT\n"
-        "  delete <k>   - Delete key from the DHT\n"
-        "  files        - List all files in the network\n"
-        "  debug        - Toggle debug messages\n"
-        "  leave        - Gracefully leave the network\n"
-        "  help         - Show this help message\n"
-    )
-    print(help_text)
-    while True:
-        cmd = input("ChordCLI> ").strip()
-        if not cmd:
-            continue
-        tokens = cmd.split()
-        command = tokens[0].lower()
-        if command in ["ft", "finger", "fingers"]:
-            display_finger_table(node.node_id, node.finger_table, node.m)
-        elif command == "help":
-            print(help_text)
-        elif command == "debug":
-            global DEBUG
-            DEBUG = not DEBUG
-            print(f"Debug mode {'enabled' if DEBUG else 'disabled'}.")
-        elif command == "state":
-            with node.lock:
-                print(f"Node ID: {node.node_id}")
-                print(f"Predecessor: {node.predecessor}")
-                print(f"Successor: {node.successor}")
-                display_finger_table(node.node_id, node.finger_table, node.m)
-                print("Stored Data:", node.data)
-        elif command == "upload":
-            if len(tokens) < 2:
-                print("Usage: upload <value>")
+    help_text = {
+        "ft": "Display the current finger table.",
+        "state": "Show the current state of the node, including its ID, predecessor, successor, and stored data.",
+        "upload": "Upload a file to the DHT. Usage: upload <file_path>",
+        "get": "Retrieve a file from the DHT using its key. Usage: get <key>",
+        "delete": "Delete a file from the DHT using its key. Usage: delete <key>",
+        "files": "List all files currently stored in the DHT.",
+        "debug": "Toggle debug mode to enable or disable detailed logs.",
+        "leave": "Gracefully leave the network.",
+        "help": "Show this help message or detailed help for a specific command. Usage: help [command]",
+    }
+
+    def print_help(command=None):
+        if command:
+            if command in help_text:
+                print(f"{Fore.CYAN}{command}{Style.RESET_ALL}: {help_text[command]}")
             else:
-                value = " ".join(tokens[1:])
-                node.upload(value)
-        elif command == "get":
-            if len(tokens) < 2:
-                print("Usage: get <key>")
-            else:
-                key = tokens[1]
-                node.get(key)
-        elif command == "delete":
-            if len(tokens) < 2:
-                print("Usage: delete <key>")
-            else:
-                key = tokens[1]
-                node.delete(key)
-        elif command == "leave":
-            node.leave_gracefully()
-            print("Node is leaving the network. Goodbye!")
-            exit(0)
-        elif command == "files":
-            print("Retrieving files in the network...")
-            node.list_files()
+                print(f"{Fore.RED}Unknown command '{command}'. Type 'help' for a list of commands.{Style.RESET_ALL}")
         else:
-            print("Unknown command. Type 'help' for available commands.")
+            print(f"{Fore.CYAN}Available Commands:{Style.RESET_ALL}")
+            for cmd, desc in help_text.items():
+                print(f"  {Fore.YELLOW}{cmd:<10}{Style.RESET_ALL} - {desc}")
+
+    print(f"{Fore.GREEN}Welcome to the Chord DHT CLI!{Style.RESET_ALL}")
+    print("Type 'help' for a list of commands.")
+
+    while True:
+        try:
+            cmd = input(f"{Fore.BLUE}ChordCLI>{Style.RESET_ALL} ").strip()
+            if not cmd:
+                continue
+            tokens = cmd.split()
+            command = tokens[0].lower()
+
+            if command in ["help", "?"]:
+                if len(tokens) > 1:
+                    print_help(tokens[1])
+                else:
+                    print_help()
+            elif command in ["ft", "finger", "fingers"]:
+                display_finger_table(node.node_id, node.finger_table, node.m)
+            elif command == "state":
+                with node.lock:
+                    print(f"{Fore.CYAN}Node ID:{Style.RESET_ALL} {node.node_id}")
+                    print(f"{Fore.CYAN}Predecessor:{Style.RESET_ALL} {node.predecessor}")
+                    print(f"{Fore.CYAN}Successor:{Style.RESET_ALL} {node.successor}")
+                    print(f"{Fore.CYAN}Stored Data:{Style.RESET_ALL} {node.data}")
+                    display_finger_table(node.node_id, node.finger_table, node.m)
+            elif command == "upload":
+                if len(tokens) < 2:
+                    print(f"{Fore.RED}Usage: upload <file_path>{Style.RESET_ALL}")
+                else:
+                    file_path = " ".join(tokens[1:])
+                    if os.path.isfile(file_path):
+                        node.upload(file_path)
+                        print(f"{Fore.GREEN}File '{file_path}' uploaded successfully.{Style.RESET_ALL}")
+                    else:
+                        print(f"{Fore.RED}File '{file_path}' does not exist.{Style.RESET_ALL}")
+            elif command == "get":
+                if len(tokens) < 2:
+                    print(f"{Fore.RED}Usage: get <key>{Style.RESET_ALL}")
+                else:
+                    key = tokens[1]
+                    node.get(key)
+            elif command == "delete":
+                if len(tokens) < 2:
+                    print(f"{Fore.RED}Usage: delete <key>{Style.RESET_ALL}")
+                else:
+                    key = tokens[1]
+                    node.delete(key)
+                    print(f"{Fore.GREEN}Key '{key}' deleted successfully.{Style.RESET_ALL}")
+            elif command == "files":
+                print(f"{Fore.CYAN}Retrieving files in the network...{Style.RESET_ALL}")
+                node.list_files()
+            elif command == "debug":
+                global DEBUG
+                DEBUG = not DEBUG
+                print(f"{Fore.YELLOW}Debug mode {'enabled' if DEBUG else 'disabled'}.{Style.RESET_ALL}")
+            elif command == "leave":
+                confirm = input(f"{Fore.YELLOW}Are you sure you want to leave the network? (yes/no): {Style.RESET_ALL}").strip().lower()
+                if confirm in ["yes", "y"]:
+                    node.leave_gracefully()
+                    print(f"{Fore.GREEN}Node has left the network. Goodbye!{Style.RESET_ALL}")
+                    sys.exit(0)
+                else:
+                    print(f"{Fore.CYAN}Leave operation canceled.{Style.RESET_ALL}")
+            else:
+                print(f"{Fore.RED}Unknown command '{command}'. Type 'help' for a list of commands.{Style.RESET_ALL}")
+        except KeyboardInterrupt:
+            print(f"\n{Fore.YELLOW}Exiting...{Style.RESET_ALL}")
+            sys.exit(0)
+        except Exception as e:
+            print(f"{Fore.RED}Error: {e}{Style.RESET_ALL}")
 
 if __name__ == "__main__":
     m = int(input("Enter the number of bits for the identifier space (m, up to 32): "))
