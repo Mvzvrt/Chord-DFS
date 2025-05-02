@@ -3,6 +3,7 @@ import threading
 import time
 import os
 import sys
+import subprocess
 from colorama import Fore, Style, init
 
 # Initialize colorama for cross-platform color support
@@ -185,23 +186,35 @@ class ChordNode:
         elif cmd == 'UPLOAD_ACK':
             debug_print("UPLOAD_ACK received from", addr)
 
-        elif cmd == 'GET':
-            key = parts[1]
-            key_id = generate_key_id(key, self.m)
+        elif cmd == 'DOWNLOAD':
+            file_name = " ".join(parts[1:])
+            key_id = generate_key_id(file_name, self.m)
             if self.is_responsible_for(key_id):
                 with self.lock:
-                    value = self.data.get(key, "None")
-                debug_print(f"GET: Found key '{key}' locally with value: {value}")
-                self.send_message(f"GET_REPLY {key} {value}", addr)
+                    file_path = self.data.get(str(key_id))
+                if file_path:
+                    desktop_path = os.path.join(os.path.expanduser("~"), "Desktop", "ChordDFS Files")
+                    file_full_path = os.path.join(desktop_path, file_path)
+                    if os.path.isfile(file_full_path):
+                        with open(file_full_path, 'rb') as f:
+                            file_content = f.read()
+                        file_content_hex = file_content.hex()  # Convert binary to hex for safe transmission
+                        self.send_message(f"DOWNLOAD_REPLY {file_name} {file_content_hex}", addr)
+                        debug_print(f"DOWNLOAD: Sent file '{file_name}' to {addr}.")
+                    else:
+                        self.send_message(f"DOWNLOAD_REPLY {file_name} not_found", addr)
+                        debug_print(f"DOWNLOAD: File '{file_name}' not found locally.")
+                else:
+                    self.send_message(f"DOWNLOAD_REPLY {file_name} not_found", addr)
+                    debug_print(f"DOWNLOAD: File '{file_name}' not found in data.")
             else:
                 successor = self.find_successor_recursive(key_id)
-                debug_print(f"GET: Forwarding request for key '{key}' to successor {successor}")
-                response = self.rpc(f"GET {key}", successor)
-                if response:
-                    self.send_message(response, addr)
-        elif cmd == 'GET_REPLY':
-            debug_print("GET_REPLY received; forwarding reply.")
-            self.send_message(message, addr)
+                debug_print(f"DOWNLOAD: Forwarding request for file '{file_name}' to successor {successor}.")
+                self.send_message(f"DOWNLOAD {file_name}", successor)
+        elif cmd == 'DOWNLOAD_REPLY':
+            # This will be handled by the requesting node
+            debug_print(f"DOWNLOAD_REPLY received from {addr}: {message}")
+            
         elif cmd == 'DELETE':
             key = parts[1]
             key_id = generate_key_id(key, self.m)
@@ -500,23 +513,6 @@ class ChordNode:
         pred_id = generate_node_id(self.predecessor[0], self.predecessor[1], self.m)
         return in_range(key_id, pred_id, self.node_id, self.m)
 
-    # --- DHT Operations for Clients ---
-    # def put(self, key, value):
-    #    key_id = generate_key_id(key, self.m)
-    #    if self.is_responsible_for(key_id):
-    #        with self.lock:
-    #            self.data[key] = value
-    #        print(f"Key '{key}' stored locally.")
-    #        debug_print(f"put: Key '{key}' stored locally with value '{value}'.")
-    #    else:
-    #        successor = self.find_successor_recursive(key_id)
-    #        debug_print(f"put: Forwarding key '{key}' to node {successor}.")
-    #        response = self.rpc(f"PUT {key} {value}", successor)
-    #        if response and response.startswith("PUT_ACK"):
-    #            print(f"Key '{key}' stored on remote node.")
-    #        else:
-    #            print(f"Failed to store key '{key}'.")
-
     def upload(self, file_name):
         """Upload a file to the Chord network."""
         if not os.path.isfile(file_name):
@@ -550,30 +546,70 @@ class ChordNode:
             # Send the file content
             self.sock.sendto(file_content, successor)
 
-    def get(self, key):
-        key_id = generate_key_id(key, self.m)
+    # def get(self, key):
+    #     key_id = generate_key_id(key, self.m)
+    #     if self.is_responsible_for(key_id):
+    #         with self.lock:
+    #             value = self.data.get(key)
+    #         if value is not None:
+    #             print(f"Value for key '{key}': {value}")
+    #             debug_print(f"get: Found key '{key}' locally with value '{value}'.")
+    #         else:
+    #             print(f"Key '{key}' not found.")
+    #             debug_print(f"get: Key '{key}' not found locally.")
+    #     else:
+    #         successor = self.find_successor_recursive(key_id)
+    #         debug_print(f"get: Forwarding request for key '{key}' to node {successor}.")
+    #         response = self.rpc(f"GET {key}", successor)
+    #         if response and response.startswith("GET_REPLY"):
+    #             parts = response.split(maxsplit=2)
+    #             if len(parts) >= 3:
+    #                 print(f"Value for key '{key}': {parts[2]}")
+    #                 debug_print(f"get: Received value for key '{key}': {parts[2]}.")
+    #             else:
+    #                 print(f"Key '{key}' not found on remote node.")
+    #         else:
+    #             print(f"Failed to retrieve key '{key}'.")
+
+    def open(self, file_name):
+        """Open a file from the Chord network."""
+        key_id = generate_key_id(file_name, self.m)
         if self.is_responsible_for(key_id):
             with self.lock:
-                value = self.data.get(key)
-            if value is not None:
-                print(f"Value for key '{key}': {value}")
-                debug_print(f"get: Found key '{key}' locally with value '{value}'.")
+                file_path = self.data.get(str(key_id))
+            if file_path:
+                desktop_path = os.path.join(os.path.expanduser("~"), "Desktop", "ChordDFS Files")
+                file_full_path = os.path.join(desktop_path, file_path)
+                if os.path.isfile(file_full_path):
+                    print(f"Opening file '{file_name}'...")
+                    debug_print(f"open: File '{file_name}' found locally. Opening it.")
+                    os.startfile(file_full_path)  # Open the file
+                else:
+                    print(f"File '{file_name}' not found.")
+                    debug_print(f"open: File '{file_name}' not found locally.")
             else:
-                print(f"Key '{key}' not found.")
-                debug_print(f"get: Key '{key}' not found locally.")
+                print(f"File '{file_name}' not found locally.")
+                debug_print(f"open: File '{file_name}' not found locally.")
         else:
             successor = self.find_successor_recursive(key_id)
-            debug_print(f"get: Forwarding request for key '{key}' to node {successor}.")
-            response = self.rpc(f"GET {key}", successor)
-            if response and response.startswith("GET_REPLY"):
+            debug_print(f"open: Requesting file '{file_name}' from node {successor}.")
+            response = self.rpc(f"DOWNLOAD {file_name}", successor)
+            if response and response.startswith("DOWNLOAD_REPLY"):
                 parts = response.split(maxsplit=2)
                 if len(parts) >= 3:
-                    print(f"Value for key '{key}': {parts[2]}")
-                    debug_print(f"get: Received value for key '{key}': {parts[2]}.")
+                    file_content = bytes.fromhex(parts[2])  # Convert hex back to binary
+                    downloads_path = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "Downloads")
+                    os.makedirs(downloads_path, exist_ok=True)
+                    file_path = os.path.join(downloads_path, file_name)
+                    with open(file_path, 'wb') as f:
+                        f.write(file_content)
+                    print(f"Opening file '{file_name}'...")
+                    debug_print(f"open: File '{file_name}' saved to '{file_path}'. Opening it.")
+                    os.startfile(file_path)
                 else:
-                    print(f"Key '{key}' not found on remote node.")
+                    print(f"File '{file_name}' not found on remote node.")
             else:
-                print(f"Failed to retrieve key '{key}'.")
+                print(f"Failed to open file '{file_name}'.")
 
     def delete(self, key):
         key_id = generate_node_id(key, self.m)
@@ -653,7 +689,7 @@ def cli(node):
         "ft": "Display the current finger table.",
         "state": "Show the current state of the node, including its ID, predecessor, successor, and stored data.",
         "upload": "Upload a file to the DHT. Usage: upload <file_path>",
-        "get": "Retrieve a file from the DHT using its key. Usage: get <key>",
+        "open": "Open a file from the DHT using its name. Usage: open <file_name>",
         "delete": "Delete a file from the DHT using its key. Usage: delete <key>",
         "files": "List all files currently stored in the DHT.",
         "debug": "Toggle debug mode to enable or disable detailed logs.",
@@ -707,12 +743,12 @@ def cli(node):
                         print(f"{Fore.GREEN}File '{file_path}' uploaded successfully.{Style.RESET_ALL}")
                     else:
                         print(f"{Fore.RED}File '{file_path}' does not exist.{Style.RESET_ALL}")
-            elif command == "get":
+            elif command == "open":
                 if len(tokens) < 2:
-                    print(f"{Fore.RED}Usage: get <key>{Style.RESET_ALL}")
+                    print(f"{Fore.RED}Usage: open <file_name>{Style.RESET_ALL}")
                 else:
-                    key = tokens[1]
-                    node.get(key)
+                    file_name = " ".join(tokens[1:])
+                    node.open(file_name)
             elif command == "delete":
                 if len(tokens) < 2:
                     print(f"{Fore.RED}Usage: delete <key>{Style.RESET_ALL}")
