@@ -690,7 +690,7 @@ def cli(node):
         "state": "Show the current state of the node, including its ID, predecessor, successor, and stored data.",
         "upload": "Upload a file to the DHT. Usage: upload <file_path>",
         "open": "Open a file from the DHT using its name. Usage: open <file_name>",
-        "delete": "Delete a file from the DHT using its key. Usage: delete <key>",
+        # "delete": "Delete a file from the DHT using its key. Usage: delete <key>",
         "files": "List all files currently stored in the DHT.",
         "debug": "Toggle debug mode to enable or disable detailed logs.",
         "leave": "Gracefully leave the network.",
