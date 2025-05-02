@@ -49,8 +49,8 @@ Before running the program, ensure you have the following installed:
 - **From GitHub**: Clone the repository:
   
   ```bash
-  git clone https://github.com/your-username/your-repo-name.git
-  cd your-repo-name
+  git clone https://github.com/Mvzvrt/Chord-DFS.git
+  cd Chord-DFS
   ```
 - **From ZIP File**: Extract the ZIP file and navigate to the extracted folder.
 
