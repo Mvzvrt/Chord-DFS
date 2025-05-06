@@ -24,6 +24,7 @@ def generate_key_id(data, m):
     """Generate a key ID from a given data string."""
     sha1_hash = hashlib.sha1(data.encode()).hexdigest()
     key_id = int(sha1_hash, 16) & ((1 << m) - 1)
+    print(f"Generated hash for {data} given {m} bits is: {key_id}")
     return key_id
 
 def display_finger_table(node_id, finger_table, m):
