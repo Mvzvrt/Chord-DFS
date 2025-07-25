@@ -1,4 +1,4 @@
-# Chord-Based Distributed File System
+# Chord-Based Distributed File System [Local Server Only]
 
 Welcome to the **Chord-Based Distributed File System**! This project implements a distributed hash table (DHT) using the Chord protocol, enabling efficient file storage and retrieval in a decentralized network.
 
