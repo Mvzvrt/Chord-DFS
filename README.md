@@ -169,6 +169,8 @@ This project is licensed under the MIT License. See the LICENSE file for details
 ## 💡 Acknowledgments
 
 - **Chord Protocol**: Inspired by the original Chord DHT paper.
+Reference: I. Stoica et al., “Chord: a scalable peer-to-peer lookup protocol for internet applications,” IEEE/ACM Transactions on Networking, vol. 11, no. 1, pp. 17–32, Feb. 2003, doi: 10.1109/tnet.2002.808407.
+
 - **Colorama**: For cross-platform terminal color support.
 
 ---
